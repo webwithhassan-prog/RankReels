@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <defs>
+    <linearGradient id="rrGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF5C39"/>
+      <stop offset="100%" stop-color="#FF3815"/>
+    </linearGradient>
+    <linearGradient id="tierGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <!-- Background Rounded Rect -->
+  <rect width="48" height="48" rx="12" fill="#0D0D0F"/>
+  <rect x="1" y="1" width="46" height="46" rx="11" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+  
+  <!-- Tier stack icons with signature colors -->
+  <rect x="10" y="11" width="28" height="5" rx="2.5" fill="#F08A7E"/>
+  <rect x="10" y="19" width="22" height="5" rx="2.5" fill="#F2B27C"/>
+  <rect x="10" y="27" width="16" height="5" rx="2.5" fill="#EDD87F"/>
+  
+  <!-- S-Tier Star Accent -->
+  <circle cx="34" cy="27" r="5" fill="url(#rrGrad)"/>
+  <path d="M34 24 L35.2 26.2 L37.5 26.5 L35.8 28.1 L36.2 30.5 L34 29.3 L31.8 30.5 L32.2 28.1 L30.5 26.5 L32.8 26.2 Z" fill="#FFFFFF"/>
+
+  <!-- Base play badge -->
+  <rect x="10" y="35" width="28" height="3" rx="1.5" fill="rgba(255,255,255,0.15)"/>
+</svg>

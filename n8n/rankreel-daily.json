@@ -1,0 +1,416 @@
+{
+  "name": "RankReel daily",
+  "nodes": [
+    {
+      "id": "27b67d26-21e5-4d14-82c4-830690e40e0c",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c01ae267-170b-469f-9769-517e02b63db5",
+      "name": "Run now",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rankreel-daily-run",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "55660fa5-fe2c-44bc-9e0c-91272ce231e3"
+    },
+    {
+      "id": "024ea39a-d897-4b8e-ade0-c6277a0976fe",
+      "name": "Ideas due?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// The day in n8n's own time zone, as 2026-09-30.\nconst today = new Date().toLocaleDateString('en-CA');\n// The five channels of the niche test. id matches the channel presets in RankReel; format is the one each channel uses.\nconst CHANNELS = [\n  { id: 'rank-the-play', name: 'Rank The Play', niche: 'sports: football, basketball, cricket and more', format: 'countdown', news: 'sports' },\n  { id: 'wait-really', name: 'Wait, Really?', niche: 'surprising did-you-know facts about everyday things, history and science', format: 'story', news: 'science discovery' },\n  { id: 'tech-tier', name: 'Tech Tier', niche: 'tech, gadgets, phones, apps and AI', format: 'tiers', news: 'tech gadgets AI' },\n  { id: 'money-levels', name: 'Money Levels', niche: 'money: luxury, prices, rich people and what things cost', format: 'levels', news: 'luxury billionaire price' },\n  { id: 'guess-the-scene', name: 'Guess The Scene', niche: 'TV shows and films', format: 'quiz', news: 'movie TV series' },\n];\nconst data = $getWorkflowStaticData('global');\n// \"Run now\" comes through a webhook, whose item has headers; the hourly check does not.\nconst forced = Boolean($json.headers);\nif (!forced && data.ideas?.date === today) return [];\nreturn CHANNELS.map((channel) => ({ json: channel }));"
+      }
+    },
+    {
+      "id": "0bec3f4f-4af1-4eb4-ad70-db4936b7b183",
+      "name": "Read the news",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        -100
+      ],
+      "parameters": {
+        "url": "={{ 'https://news.google.com/rss/search?q=' + encodeURIComponent($json.news + ' when:7d') + '&hl=en-US&gl=US&ceid=US:en' }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c32a6c22-bfb1-4731-a834-c2cfa8114986",
+      "name": "Ask for ideas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "const PLANNER = `You plan short vertical videos (YouTube Shorts) that are edited together from existing clips, for several channels.\n\nThe formats:\n- countdown: clips ranked and counted down to number 1. Title like \"Ranking the craziest near misses\". items = 5 specific, well known things, the best one first.\n- levels: clips that climb from level 1 to level 100. Title like \"Level 1 to 100 trick shots\". items = 5 feats, from the easiest to the most extreme.\n- tiers: every clip lands in a tier from S down to D. Title like \"Tier list of skate tricks\". items = 5 specific, well known things, the best one first.\n- quiz: viewers guess what each clip shows before the answer appears. Title like \"Guess the footballer\". items = the 5 answers.\n- story: one surprising fact told by a voiceover. Title like \"Why airplane windows have a tiny hole\". items = the 5 shots to show, in order.\n\nRules:\n- title: 3 to 7 words, plain text, no emoji, no hashtags, no quotation marks. It names a narrow angle, not just the topic.\n- keywords: the 1 or 2 words from the title that say what the video is about.\n- items: things that exist on video and that a viewer would recognise by name, 1 to 4 words each, no numbering. Be specific.\n- search: a short phrase to type into YouTube or TikTok search to find these clips.\n- Headlines are background on what is new this week. Use one only if it points to something people are looking for right now.\n- The three ideas for a channel are all different from each other.`;\n\nconst ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\" };\nconst decode = (text) => text.replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, '$1').replace(/&(#\\d+|\\w+);/g, (all, code) => (code[0] === '#' ? String.fromCodePoint(Number(code.slice(1))) : ENTITIES[code] ?? all));\n\nconst channels = $('Ideas due?').all().map((item) => item.json);\nconst feeds = $input.all();\nconst parts = channels.map((channel, at) => {\n  const xml = String(feeds[at]?.json?.data ?? '');\n  const headlines = [...xml.matchAll(/<item>[\\s\\S]*?<title>([\\s\\S]*?)<\\/title>/g)]\n    .map(([, title]) => decode(title).replace(/\\s+-\\s+[^-]+$/, '').trim())\n    .filter(Boolean)\n    .slice(0, 5);\n  const news = headlines.length ? '\\nHeadlines from this week:\\n' + headlines.map((line) => '- ' + line).join('\\n') : '';\n  return `Channel id: ${channel.id}\\nChannel: ${channel.name}, about ${channel.niche}. Format: ${channel.format}.${news}`;\n});\n\nconst idea = {\n  type: 'object',\n  properties: {\n    format: { type: 'string' },\n    title: { type: 'string' },\n    keywords: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 2 },\n    items: { type: 'array', items: { type: 'string' }, minItems: 5, maxItems: 5 },\n    search: { type: 'string' },\n  },\n  required: ['format', 'title', 'keywords', 'items', 'search'],\n};\nconst schema = {\n  type: 'object',\n  properties: {\n    channels: {\n      type: 'array',\n      items: {\n        type: 'object',\n        properties: {\n          id: { type: 'string', enum: channels.map((channel) => channel.id) },\n          ideas: { type: 'array', items: idea, minItems: 3, maxItems: 3 },\n        },\n        required: ['id', 'ideas'],\n      },\n    },\n  },\n  required: ['channels'],\n};\n\nconst day = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });\nreturn [{\n  json: {\n    request: {\n      systemInstruction: { parts: [{ text: PLANNER }] },\n      contents: [{ role: 'user', parts: [{ text: `Today is ${day}.\\n\\n${parts.join('\\n\\n')}\\n\\nGive 3 video ideas for each channel, in that channel's format.` }] }],\n      generationConfig: { temperature: 0.9, responseMimeType: 'application/json', responseJsonSchema: schema, thinkingConfig: { thinkingLevel: 'minimal' } },\n    },\n  },\n}];"
+      }
+    },
+    {
+      "id": "438cd40a-b9d1-429d-aa97-f7c4c49cdfd8",
+      "name": "Gemini writes the ideas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        -100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "iyZDitj7A04jVj4F",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "id": "20c8a708-fc4f-406e-8c95-cac791b3bfc2",
+      "name": "Keep the ideas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// The day in n8n's own time zone, as 2026-09-30.\nconst today = new Date().toLocaleDateString('en-CA');\nconst candidate = $json.candidates?.[0];\nconst text = (candidate?.content?.parts ?? []).filter((part) => !part.thought).map((part) => part.text ?? '').join('');\nlet reply = null;\ntry {\n  reply = JSON.parse(text);\n} catch {\n  // Gemini was busy or said no. Nothing is kept, so the next hourly check tries again.\n}\nif (!Array.isArray(reply?.channels) || !reply.channels.length) return [{ json: { saved: false, why: $json.error?.message ?? 'no usable answer' } }];\nconst data = $getWorkflowStaticData('global');\ndata.ideas = { date: today, channels: Object.fromEntries(reply.channels.map((channel) => [channel.id, channel.ideas])) };\nreturn [{ json: { saved: true, channels: reply.channels.length } }];"
+      }
+    },
+    {
+      "id": "68b65f18-6a8b-4533-9da3-183a0ee69828",
+      "name": "Scores due?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// The day in n8n's own time zone, as 2026-09-30.\nconst today = new Date().toLocaleDateString('en-CA');\nconst data = $getWorkflowStaticData('global');\nconst forced = Boolean($json.headers);\nif (!forced && data.history?.[today]) return [];\n// The handles are the ones RankReel last sent, from its channel presets.\nreturn (data.handles ?? []).map((handle) => ({ json: { handle } }));"
+      }
+    },
+    {
+      "id": "a8bd9e02-2096-4525-9973-d3b5fe1d1974",
+      "name": "Open the channel page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "url": "={{ 'https://www.youtube.com/' + $json.handle }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "10defca3-c75d-46c7-8680-db4adfeddbd1",
+      "name": "Find the channel id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const page = String($json.data ?? '');\nconst handle = $('Scores due?').item.json.handle;\nconst id = page.match(/<link rel=\"canonical\" href=\"https:\\/\\/www\\.youtube\\.com\\/channel\\/(UC[\\w-]{22})\"/)?.[1] ?? '';\nreturn { json: { handle, id } };"
+      }
+    },
+    {
+      "id": "49b4a8eb-e620-4b33-ad4a-051a1f27c5f1",
+      "name": "Read the channel feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "url": "={{ 'https://www.youtube.com/feeds/videos.xml?channel_id=' + ($json.id || 'none') }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "6e189ad3-57a9-45bd-8185-ba6904366501",
+      "name": "Keep the snapshot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// The day in n8n's own time zone, as 2026-09-30.\nconst today = new Date().toLocaleDateString('en-CA');\nconst found = $('Find the channel id').all().map((item) => item.json);\nconst feeds = $input.all();\nconst snapshot = {};\nfound.forEach((channel, at) => {\n  if (!channel.id) return;\n  const xml = String(feeds[at]?.json?.data ?? '');\n  const views = [...xml.matchAll(/<media:statistics views=\"(\\d+)\"/g)].map(([, count]) => Number(count));\n  const total = views.reduce((sum, count) => sum + count, 0);\n  snapshot[channel.handle] = { views: total, videos: views.length, perVideo: views.length ? Math.round(total / views.length) : 0 };\n});\nif (!Object.keys(snapshot).length) return [{ json: { saved: false } }];\nconst data = $getWorkflowStaticData('global');\ndata.history = { ...(data.history ?? {}), [today]: snapshot };\n// Two months of days is plenty to see which niche grows.\ndata.history = Object.fromEntries(Object.entries(data.history).sort(([a], [b]) => a.localeCompare(b)).slice(-60));\nreturn [{ json: { saved: true, channels: Object.keys(snapshot).length } }];"
+      }
+    },
+    {
+      "id": "9456f1ed-d170-41f4-aef2-ea04ec8d3624",
+      "name": "RankReel asks",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        600
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "rankreel-daily",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "397a4f03-89e2-45b1-a00c-89f1d3687699"
+    },
+    {
+      "id": "83c35a26-f654-4919-a803-6a60575dae23",
+      "name": "Hand over",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        600
+      ],
+      "parameters": {
+        "jsCode": "const data = $getWorkflowStaticData('global');\n// RankReel sends its channels' handles, which the daily score snapshot then uses.\nconst handles = String($json.query?.handles ?? '').split(',').map((handle) => handle.trim()).filter((handle) => /^@[\\w.-]{3,30}$/.test(handle));\nif (handles.length) data.handles = [...new Set(handles)].slice(0, 10);\nreturn [{ json: { ideas: data.ideas ?? null, history: data.history ?? {} } }];"
+      }
+    },
+    {
+      "id": "15449578-4390-4f59-9339-6bf33b0cd4fd",
+      "name": "Reply to RankReel",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        600
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Ideas due?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Scores due?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Ideas due?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Scores due?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ideas due?": {
+      "main": [
+        [
+          {
+            "node": "Read the news",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the news": {
+      "main": [
+        [
+          {
+            "node": "Ask for ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask for ideas": {
+      "main": [
+        [
+          {
+            "node": "Gemini writes the ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini writes the ideas": {
+      "main": [
+        [
+          {
+            "node": "Keep the ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scores due?": {
+      "main": [
+        [
+          {
+            "node": "Open the channel page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Open the channel page": {
+      "main": [
+        [
+          {
+            "node": "Find the channel id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find the channel id": {
+      "main": [
+        [
+          {
+            "node": "Read the channel feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the channel feed": {
+      "main": [
+        [
+          {
+            "node": "Keep the snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RankReel asks": {
+      "main": [
+        [
+          {
+            "node": "Hand over",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hand over": {
+      "main": [
+        [
+          {
+            "node": "Reply to RankReel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

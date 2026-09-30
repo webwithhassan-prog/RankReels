@@ -1,0 +1,101 @@
+{
+  "name": "RankReel channel scores",
+  "nodes": [
+    {
+      "id": "8c1e2f3a-4b5c-4d6e-8f70-1a2b3c4d5e11",
+      "name": "RankReel asks",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "9d2f3a4b-5c6d-4e7f-9a81-2b3c4d5e6f12",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "rankreel-scores",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "ae304b5c-6d7e-4f80-9b92-3c4d5e6f7a13",
+      "name": "List the channels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "jsCode": "// The channels come as ?handles=@one,@two. At most ten, and only well-formed handles.\nconst handles = String($json.query?.handles ?? '')\n  .split(',')\n  .map((handle) => handle.trim())\n  .filter((handle) => /^@[\\w.-]{3,30}$/.test(handle));\nreturn [...new Set(handles)].slice(0, 10).map((handle) => ({ json: { handle } }));\n"
+      }
+    },
+    {
+      "id": "bf415c6d-7e8f-4091-8ca3-4d5e6f7a8b14",
+      "name": "Open the channel page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "url": "={{ 'https://www.youtube.com/' + $json.handle }}",
+        "options": {
+          "timeout": 20000,
+          "response": { "response": { "neverError": true, "responseFormat": "text" } }
+        }
+      }
+    },
+    {
+      "id": "c0526d7e-8f90-41a2-9db4-5e6f7a8b9c15",
+      "name": "Find the channel id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// A channel's feed is found by its id, which its page gives in the canonical link.\nconst page = String($json.data ?? '');\nconst handle = $('List the channels').item.json.handle;\nconst id = page.match(/<link rel=\"canonical\" href=\"https:\\/\\/www\\.youtube\\.com\\/channel\\/(UC[\\w-]{22})\"/)?.[1] ?? '';\nconst name = page.match(/<meta property=\"og:title\" content=\"([^\"]*)\"/)?.[1] ?? handle;\nreturn { json: { handle, id, name } };\n"
+      }
+    },
+    {
+      "id": "d1637e8f-90a1-42b3-8ec5-6f7a8b9cad16",
+      "name": "Read the channel feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "url": "={{ 'https://www.youtube.com/feeds/videos.xml?channel_id=' + ($json.id || 'none') }}",
+        "options": {
+          "timeout": 20000,
+          "response": { "response": { "neverError": true, "responseFormat": "text" } }
+        }
+      }
+    },
+    {
+      "id": "e2748f90-a1b2-43c4-9fd6-7a8b9cadbe17",
+      "name": "Add up the views",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0],
+      "parameters": {
+        "jsCode": "// The public feed lists a channel's latest 15 videos, Shorts included, with their views and likes.\nconst ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\" };\nconst decode = (text) => text.replace(/&(#\\d+|\\w+);/g, (all, code) => (code[0] === '#' ? String.fromCodePoint(Number(code.slice(1))) : ENTITIES[code] ?? all));\nconst pick = (text, pattern) => text.match(pattern)?.[1] ?? '';\n\nconst found = $('Find the channel id').all().map((item) => item.json);\nconst feeds = $input.all();\nconst channels = found.map((channel, at) => {\n  const name = decode(channel.name);\n  if (!channel.id) return { handle: channel.handle, name, found: false, videos: [], views: 0, perVideo: 0 };\n  const xml = String(feeds[at]?.json?.data ?? '');\n  const videos = [...xml.matchAll(/<entry>([\\s\\S]*?)<\\/entry>/g)].map(([, entry]) => ({\n    title: decode(pick(entry, /<title>([^<]*)<\\/title>/)),\n    link: pick(entry, /<link rel=\"alternate\" href=\"([^\"]+)\"/),\n    published: pick(entry, /<published>([^<]+)<\\/published>/),\n    views: Number(pick(entry, /<media:statistics views=\"(\\d+)\"/) || 0),\n    likes: Number(pick(entry, /<media:starRating count=\"(\\d+)\"/) || 0),\n  }));\n  const views = videos.reduce((sum, video) => sum + video.views, 0);\n  return { handle: channel.handle, name, found: true, videos, views, perVideo: videos.length ? Math.round(views / videos.length) : 0 };\n});\nreturn [{ json: { checkedAt: new Date().toISOString(), channels } }];\n"
+      }
+    },
+    {
+      "id": "f3859fa1-b2c3-44d5-8ae7-8b9cadbecf18",
+      "name": "Reply to RankReel",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1320, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "RankReel asks": { "main": [[{ "node": "List the channels", "type": "main", "index": 0 }]] },
+    "List the channels": { "main": [[{ "node": "Open the channel page", "type": "main", "index": 0 }]] },
+    "Open the channel page": { "main": [[{ "node": "Find the channel id", "type": "main", "index": 0 }]] },
+    "Find the channel id": { "main": [[{ "node": "Read the channel feed", "type": "main", "index": 0 }]] },
+    "Read the channel feed": { "main": [[{ "node": "Add up the views", "type": "main", "index": 0 }]] },
+    "Add up the views": { "main": [[{ "node": "Reply to RankReel", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

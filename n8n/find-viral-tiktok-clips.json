@@ -1,0 +1,151 @@
+{
+  "name": "Find viral TikTok clips",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Find viral TikTok clips\nType a keyword in the form and get the most-viewed short clips as links.\n\n**One-time setup**\n1. Create a free account at apify.com and copy your API token (Settings > API & Integrations).\n2. In n8n open Credentials > **Apify token** and replace the placeholder so the value reads `Bearer ` followed by your token.\n\n**Cost**: a search checks 40 clips unless you fill in Results to check. 40 costs about $0.15 of Apify credit, 100 about $0.37.\n\n**Tip**: search for one moment (\"football red card\"), not a video title, and keep Maximum seconds low to avoid compilations.\n\n**Use it**: open the Form URL shown on the first node.",
+        "height": 360,
+        "width": 520
+      },
+      "id": "5f0c2b1e-0001-4a10-9c01-aa0000000001",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Find viral clips",
+        "formDescription": "Type the moment you are looking for, such as \"football red card\". You get the most-viewed short TikTok clips as links.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Keyword",
+              "placeholder": "football red card",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Minimum views",
+              "fieldType": "number",
+              "placeholder": "500000"
+            },
+            {
+              "fieldLabel": "Maximum seconds",
+              "fieldType": "number",
+              "placeholder": "30"
+            },
+            {
+              "fieldLabel": "Results to check",
+              "fieldType": "number",
+              "placeholder": "40"
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Find clips"
+        }
+      },
+      "id": "5f0c2b1e-0002-4a10-9c01-aa0000000002",
+      "name": "Type a keyword",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "viral-clips"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/clockworks~tiktok-scraper/run-sync-get-dataset-items",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ searchQueries: [$json.Keyword], searchSection: '/video', resultsPerPage: Math.min(Math.max(Number($json['Results to check']) || 40, 10), 150), shouldDownloadVideos: false, shouldDownloadCovers: false }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "5f0c2b1e-0003-4a10-9c01-aa0000000003",
+      "name": "Search TikTok",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keeps short, high-view clips and turns them into the list shown on the form.\n// RankReel takes clips up to 60 seconds. A lower default keeps out compilations, which tend to run the full minute.\nconst LONGEST_ALLOWED = 60;\nconst DEFAULT_MAX_SECONDS = 30;\nconst DEFAULT_MIN_VIEWS = 500000;\nconst MAX_LINKS = 15;\n// A ranking needs 5 to 7 clips, so a thin result is topped up with short clips that missed the view minimum.\nconst TOP_UP_TO = 10;\n\nconst form = $('Type a keyword').first().json;\nconst keyword = String(form['Keyword'] ?? '').trim();\nconst minViews = Number(form['Minimum views']) > 0 ? Number(form['Minimum views']) : DEFAULT_MIN_VIEWS;\nconst askedSeconds = Number(form['Maximum seconds']);\nconst maxSeconds = askedSeconds > 0 ? Math.min(askedSeconds, LONGEST_ALLOWED) : DEFAULT_MAX_SECONDS;\nconst results = $input.all().map((item) => item.json);\n\nconst escapeHtml = (value) =>\n  String(value ?? '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\nconst compact = (n) =>\n  n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(/\\.0$/, '')}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n);\nconst clock = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;\n\nconst page = (body) =>\n  `<div style=\"max-width:680px;margin:48px auto;padding:0 20px;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#0f1a33\">${body}<p style=\"margin-top:28px\"><a href=\"/form/viral-clips\" style=\"color:#2447f9;font-weight:600\">Search again</a></p></div>`;\n\nconst failed = results.find((r) => r.error);\nif (failed) {\n  const reason = typeof failed.error === 'string' ? failed.error : failed.error.message || 'Unknown error';\n  const tokenProblem = /401|403|token|authenticat|authoriz/i.test(reason);\n  const html = page(\n    tokenProblem\n      ? '<h2>Apify did not accept the token</h2><p>Open Credentials in n8n, edit \"Apify token\" and make sure the value is the word Bearer, a space, then your Apify API token.</p>'\n      : `<h2>The search did not run</h2><p>${escapeHtml(reason.slice(0, 240))}</p><p>Wait a minute and search again. If it keeps failing, check your remaining credit at console.apify.com.</p>`,\n  );\n  return [{ json: { keyword, count: 0, html, clips: [] } }];\n}\n\nconst seen = new Set();\nconst shortEnough = results\n  .filter((r) => r.webVideoUrl && !r.isSlideshow && !seen.has(r.webVideoUrl) && seen.add(r.webVideoUrl))\n  .map((r) => ({\n    url: r.webVideoUrl,\n    views: Number(r.playCount) || 0,\n    likes: Number(r.diggCount) || 0,\n    seconds: Number(r.videoMeta?.duration) || 0,\n    author: r.authorMeta?.name || '',\n    caption: String(r.text || '').replace(/\\s+/g, ' ').trim().slice(0, 100),\n    posted: String(r.createTimeISO || '').slice(0, 10),\n  }))\n  .filter((c) => c.seconds > 0 && c.seconds <= maxSeconds)\n  .sort((a, b) => b.views - a.views);\n\nconst clips = shortEnough.filter((c) => c.views >= minViews).slice(0, MAX_LINKS);\nconst belowMinimum = shortEnough.filter((c) => c.views < minViews).slice(0, Math.max(0, TOP_UP_TO - clips.length));\n\nconst heading = `<h2>${clips.length} ${clips.length === 1 ? 'clip' : 'clips'} for \"${escapeHtml(keyword)}\"</h2>`;\nconst summary = `<p>At least ${compact(minViews)} views, ${maxSeconds} seconds or shorter, most viewed first. Checked ${results.length} search results.</p>`;\nconst rows = (items) =>\n  items\n      .map(\n        (c) =>\n          `<li style=\"margin-bottom:14px\"><a href=\"${escapeHtml(c.url)}\" target=\"_blank\" rel=\"noopener\" style=\"color:#2447f9;font-weight:600\">${compact(c.views)} views</a>, ${clock(c.seconds)}, @${escapeHtml(c.author)}<br><span style=\"color:#46536e\">${escapeHtml(c.caption)}</span></li>`,\n      )\n      .join('');\n\nconst list = clips.length ? `<ol>${rows(clips)}</ol>` : '';\nconst extra = belowMinimum.length\n  ? `<h3>${belowMinimum.length} more under ${compact(minViews)} views</h3><p>Short enough, but below your minimum. Most viewed first.</p><ol start=\"${clips.length + 1}\">${rows(belowMinimum)}</ol>`\n  : '';\nconst nothing = clips.length || belowMinimum.length\n  ? ''\n  : '<p>Nothing matched. Search again with a longer maximum, a broader keyword or more results to check.</p>';\n\nreturn [{ json: { keyword, count: clips.length, html: page(heading + summary + list + extra + nothing), clips, belowMinimum } }];\n"
+      },
+      "id": "5f0c2b1e-0004-4a10-9c01-aa0000000004",
+      "name": "Keep the most viewed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "={{ $json.html }}"
+      },
+      "id": "5f0c2b1e-0005-4a10-9c01-aa0000000005",
+      "name": "Show the links",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        780,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Type a keyword": {
+      "main": [
+        [
+          {
+            "node": "Search TikTok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search TikTok": {
+      "main": [
+        [
+          {
+            "node": "Keep the most viewed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep the most viewed": {
+      "main": [
+        [
+          {
+            "node": "Show the links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

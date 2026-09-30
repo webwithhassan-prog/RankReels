@@ -1,0 +1,110 @@
+{
+  "name": "RankReel AI (Gemini)",
+  "nodes": [
+    {
+      "id": "0f5c7a52-6a1e-4f0b-9d2a-1c3e5b7d9f01",
+      "name": "RankReel asks",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "7a1d3c55-2b8e-4f6a-9c0d-4e2f6a8b1c02",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rankreel-ai",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "1b6d8e63-7c2f-4a1c-8e3b-2d4f6c8e0a03",
+      "name": "Build the request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "jsCode": "// The Gemini models to use, both on the free tier and both always Google's newest of their kind. Lite answers in\n// seconds; when it is busy, RankReel asks again and the bigger Flash model answers instead.\nconst MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest'];\n\nconst ask = $json.body ?? {};\nconst attempt = Math.min(Math.max(Math.floor(Number(ask.attempt) || 0), 0), MODELS.length - 1);\nconst model = MODELS[attempt];\n// RankReel checks that this workflow is on without spending any of the free Gemini requests.\nif (ask.ping) return [{ json: { ping: true, models: MODELS.length } }];\n\n// Thinking makes Gemini slower and these short jobs need little of it. Only the Lite model can go down to minimal.\nconst thinkingConfig = { thinkingLevel: model.includes('lite') ? 'minimal' : 'low' };\nconst generationConfig = { temperature: typeof ask.temperature === 'number' ? ask.temperature : 0.8, thinkingConfig };\nif (ask.schema) {\n  generationConfig.responseMimeType = 'application/json';\n  generationConfig.responseJsonSchema = ask.schema;\n}\nconst request = {\n  contents: [{ role: 'user', parts: [{ text: String(ask.prompt ?? '') }] }],\n  generationConfig,\n};\nif (ask.system) request.systemInstruction = { parts: [{ text: String(ask.system) }] };\nreturn [{ json: { ping: false, model, request } }];\n"
+      }
+    },
+    {
+      "id": "2c7e9f74-8d3a-4b2d-9f4c-3e5a7d9f1b04",
+      "name": "Just checking?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [440, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "3d8fa085-9e4b-4c3e-8a5d-4f6b8e0a2c05",
+              "leftValue": "={{ $json.ping }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "4e9ab196-af5c-4d4f-9b6e-5a7c9f1b3d06",
+      "name": "Ask Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 100],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + $json.model + ':generateContent' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 90000,
+          "response": { "response": { "neverError": true } }
+        }
+      },
+      "credentials": {
+        "googlePalmApi": { "id": "iyZDitj7A04jVj4F", "name": "Google Gemini(PaLM) Api account" }
+      }
+    },
+    {
+      "id": "5fabc2a7-b06d-4e5a-8c7f-6b8d0a2c4e07",
+      "name": "Read the answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 100],
+      "parameters": {
+        "jsCode": "const reply = $json;\nif (reply.error) {\n  const error = reply.error;\n  const detail = typeof error === 'string' ? error : [error.message, error.description].filter(Boolean).join(' ');\n  const used = error.code === 429 || /quota|exhausted|rate/i.test(detail);\n  // A busy model often has room again a moment later, or another model can answer instead.\n  const busy = error.code === 503 || /overloaded|high demand|unavailable/i.test(detail);\n  return [{\n    json: {\n      status: used ? 429 : busy ? 503 : 502,\n      busy,\n      error: used\n        ? 'Gemini’s free limit is used up for now. Wait a minute and ask again, or try tomorrow.'\n        : busy\n          ? 'Gemini is very busy right now. Wait a minute and ask again.'\n          : `Gemini did not answer: ${detail || 'no reason given'}`,\n    },\n  }];\n}\nconst candidate = reply.candidates?.[0];\n// Thinking models also send their working out; only the answer is kept.\nconst text = (candidate?.content?.parts ?? []).filter((part) => !part.thought).map((part) => part.text ?? '').join('');\nif (!text) {\n  const why = candidate?.finishReason ?? reply.promptFeedback?.blockReason;\n  return [{ json: { status: 502, error: `Gemini gave no answer${why ? ` (${why})` : ''}. Ask again.` } }];\n}\nreturn [{ json: { status: 200, model: reply.modelVersion, text } }];\n"
+      }
+    },
+    {
+      "id": "6abcd3b8-c17e-4f6b-9d80-7c9e1b3d5f08",
+      "name": "Reply to RankReel",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1100, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": "={{ $json.status ?? 200 }}" }
+      }
+    }
+  ],
+  "connections": {
+    "RankReel asks": { "main": [[{ "node": "Build the request", "type": "main", "index": 0 }]] },
+    "Build the request": { "main": [[{ "node": "Just checking?", "type": "main", "index": 0 }]] },
+    "Just checking?": {
+      "main": [
+        [{ "node": "Reply to RankReel", "type": "main", "index": 0 }],
+        [{ "node": "Ask Gemini", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ask Gemini": { "main": [[{ "node": "Read the answer", "type": "main", "index": 0 }]] },
+    "Read the answer": { "main": [[{ "node": "Reply to RankReel", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
